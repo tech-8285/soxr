@@ -60,3 +60,4 @@ if (NOT CMAKE_CROSSCOMPILING)
 endif ()
 
 add_test (1-delay-clear ${BIN}1-delay-clear)
+add_test (2-stream-contract ${BIN}2-stream-contract)
