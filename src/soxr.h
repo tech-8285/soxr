@@ -209,17 +209,21 @@ SOXR soxr_error_t soxr_set_io_ratio(soxr_t, double io_ratio, size_t slew_len);
 typedef enum {          /* Datatypes supported for I/O to/from the resampler: */
   /* Internal; do not use: */
   SOXR_FLOAT32, SOXR_FLOAT64, SOXR_INT32, SOXR_INT16, SOXR_SPLIT = 4,
+  SOXR_INT24 = 8,
 
   /* Use for interleaved channels: */
   SOXR_FLOAT32_I = SOXR_FLOAT32, SOXR_FLOAT64_I, SOXR_INT32_I, SOXR_INT16_I,
+  SOXR_INT24_I = SOXR_INT24,
 
   /* Use for split channels: */
-  SOXR_FLOAT32_S = SOXR_SPLIT  , SOXR_FLOAT64_S, SOXR_INT32_S, SOXR_INT16_S
+  SOXR_FLOAT32_S = SOXR_SPLIT  , SOXR_FLOAT64_S, SOXR_INT32_S, SOXR_INT16_S,
+  SOXR_INT24_S = SOXR_INT24 + SOXR_SPLIT
 
 } soxr_datatype_t;
 
 #define soxr_datatype_size(x)  /* Returns `sizeof' a soxr_datatype_t sample. */\
-  ((unsigned char *)"\4\10\4\2")[(x)&3]
+  ((x) == SOXR_INT24_I || (x) == SOXR_INT24_S ? 3u : \
+   (unsigned)((unsigned char *)"\4\10\4\2")[(x)&3])
 
 
 

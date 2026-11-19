@@ -177,13 +177,31 @@ soxr_runtime_spec_t soxr_runtime_spec(unsigned num_threads)
 
 
 
+static bool soxr_datatype_valid(soxr_datatype_t type)
+{
+  return (type & ~SOXR_SPLIT) == SOXR_INT24 ||
+      (unsigned)type < (unsigned)SOXR_SPLIT * 2;
+}
+
+static double soxr_datatype_full_scale(soxr_datatype_t type)
+{
+  switch (type & ~SOXR_SPLIT) {
+    case SOXR_FLOAT32: return 1;
+    case SOXR_FLOAT64: return 1;
+    case SOXR_INT32:   return 65536. * 32768;
+    case SOXR_INT16:   return 32768;
+    case SOXR_INT24:   return 8388608.; /* 2^23 */
+    default:           return 1;
+  }
+}
+
 soxr_io_spec_t soxr_io_spec(
   soxr_datatype_t itype,
   soxr_datatype_t otype)
 {
   soxr_io_spec_t spec, * p = &spec;
   memset(p, 0, sizeof(*p));
-  if ((itype | otype) >= SOXR_SPLIT * 2)
+  if (!soxr_datatype_valid(itype) || !soxr_datatype_valid(otype))
     p->e = "invalid io datatype(s)";
   else {
     p->itype = itype;
@@ -367,7 +385,6 @@ soxr_t soxr_create(
 {
   double io_ratio = output_rate!=0? input_rate!=0?
     input_rate / output_rate : -1 : input_rate!=0? -1 : 0;
-  static const float datatype_full_scale[] = {1, 1, 65536.*32768, 32768};
   soxr_t p = 0;
   soxr_error_t error = 0;
 
@@ -390,7 +407,8 @@ soxr_t soxr_create(
 #endif
 
   if (q_spec && q_spec->e)  error = q_spec->e;
-  else if (io_spec && (io_spec->itype | io_spec->otype) >= SOXR_SPLIT * 2)
+  else if (io_spec && (!soxr_datatype_valid(io_spec->itype) ||
+                       !soxr_datatype_valid(io_spec->otype)))
     error = "invalid io datatype(s)";
 
   if (!error && !(p = calloc(sizeof(*p), 1))) error = "malloc failed";
@@ -425,8 +443,8 @@ soxr_t soxr_create(
     runtime_flag("SOXR_STRICT_BUF", 1, 2, &p->runtime_spec.flags);
     runtime_flag("SOXR_NOSMALLINTOPT", 1, 3, &p->runtime_spec.flags);
 
-    p->io_spec.scale *= datatype_full_scale[p->io_spec.otype & 3] /
-                        datatype_full_scale[p->io_spec.itype & 3];
+    p->io_spec.scale *= soxr_datatype_full_scale(p->io_spec.otype) /
+                        soxr_datatype_full_scale(p->io_spec.itype);
 
     p->seed = (unsigned long)time(0) ^ (unsigned long)(size_t)p;
 

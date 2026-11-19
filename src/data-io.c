@@ -10,6 +10,34 @@
 
 
 
+/* Packed, 3-byte-per-sample 24-bit PCM in two's-complement (the same signed
+ * convention as the 16- and 32-bit integer types), in the host's byte order.
+ * LOAD_S24 and STORE_S24 are exact inverses over [-2^23, 2^23-1]. */
+
+#if HAVE_BIGENDIAN
+  #define LOAD_S24(p) ((long)(((unsigned long)((p)[0] & 0xff) << 16 | \
+      (unsigned long)((p)[1] & 0xff) << 8 | \
+      (unsigned long)((p)[2] & 0xff)) ^ 0x800000UL) - 0x800000L)
+  #define STORE_S24(p, x) do { \
+    unsigned long u = (unsigned long)(int32_t)(x); \
+    (p)[0] = (unsigned char)(u >> 16); \
+    (p)[1] = (unsigned char)(u >> 8); \
+    (p)[2] = (unsigned char)(u); \
+  } while (0)
+#else
+  #define LOAD_S24(p) ((long)(((unsigned long)((p)[0] & 0xff) | \
+      (unsigned long)((p)[1] & 0xff) << 8 | \
+      (unsigned long)((p)[2] & 0xff) << 16) ^ 0x800000UL) - 0x800000L)
+  #define STORE_S24(p, x) do { \
+    unsigned long u = (unsigned long)(int32_t)(x); \
+    (p)[0] = (unsigned char)(u); \
+    (p)[1] = (unsigned char)(u >> 8); \
+    (p)[2] = (unsigned char)(u >> 16); \
+  } while (0)
+#endif
+
+
+
 #define DEINTERLEAVE_FROM(T,flag) do { \
   unsigned i; \
   size_t j; \
@@ -21,6 +49,18 @@
   *src0 = src; \
 } while (0)
 
+#define DEINTERLEAVE_FROM_24 do { \
+  unsigned i; \
+  size_t j; \
+  unsigned char const * src = *src0; \
+  if (ch > 1) for (j = 0; j < n; ++j) \
+    for (i = 0; i < ch; ++i) \
+      dest[i][j] = (DEINTERLEAVE_TO)LOAD_S24(src), src += 3; \
+  else for (j = 0; j < n; ++j) \
+    dest[0][j] = (DEINTERLEAVE_TO)LOAD_S24(src), src += 3; \
+  *src0 = src; \
+} while (0)
+
 
 
 #if WITH_CR64 || WITH_CR64S
@@ -28,11 +68,12 @@ void _soxr_deinterleave(double * * dest, /* Round/clipping not needed here */
     soxr_datatype_t data_type, void const * * src0, size_t n, unsigned ch)
 {
 #define DEINTERLEAVE_TO double
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: DEINTERLEAVE_FROM(float, 0); break;
     case SOXR_FLOAT64: DEINTERLEAVE_FROM(double, 1); break;
     case SOXR_INT32:   DEINTERLEAVE_FROM(int32_t, 0); break;
     case SOXR_INT16:   DEINTERLEAVE_FROM(int16_t, 0); break;
+    case SOXR_INT24:   DEINTERLEAVE_FROM_24; break;
     default: break;
   }
 }
@@ -46,11 +87,12 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
 {
 #undef DEINTERLEAVE_TO
 #define DEINTERLEAVE_TO float
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: DEINTERLEAVE_FROM(float, 1); break;
     case SOXR_FLOAT64: DEINTERLEAVE_FROM(double, 0); break;
     case SOXR_INT32:   DEINTERLEAVE_FROM(int32_t, 0); break;
     case SOXR_INT16:   DEINTERLEAVE_FROM(int16_t, 0); break;
+    case SOXR_INT24:   DEINTERLEAVE_FROM_24; break;
     default: break;
   }
 }
@@ -158,6 +200,64 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
 
 
 
+/* Packed 24-bit output: round to nearest (ties away from zero), saturate to
+ * [-2^23, 2^23-1] and count saturated samples as clips.  No dithering.  The
+ * same portable arithmetic is used for both the single- and double-precision
+ * engines so that either gives identical 24-bit results.                  */
+
+#define RINT24_CLIP_FUNCS(SUFFIX, FLOATX_T) \
+static size_t lsx_rint24_clip##SUFFIX(void * * const dest0, \
+    FLOATX_T const * const src, size_t const n) \
+{ \
+  static const double N = 8388608.; /* 2^23 */ \
+  size_t i, clips = 0; \
+  unsigned char * dest = *dest0; \
+  double d; \
+  for (i = 0; i < n; ++i) { \
+    d = (double)src[i]; \
+    d = d > 0? d + .5 >= N? ++clips, N - 1 : d + .5 \
+             : d - .5 <= -N - 1? ++clips, -N : d - .5; \
+    STORE_S24(dest, (long)d); \
+    dest += 3; \
+  } \
+  *dest0 = dest; \
+  return clips; \
+} \
+\
+static size_t lsx_rint24_clip_2##SUFFIX(void * * dest0, \
+    FLOATX_T const * const * srcs, unsigned const stride, size_t const n) \
+{ \
+  static const double N = 8388608.; /* 2^23 */ \
+  unsigned j; \
+  size_t i, clips = 0; \
+  unsigned char * dest = *dest0; \
+  double d; \
+  if (n) { \
+    for (j = 0; j < stride; ++j) { \
+      FLOATX_T const * const src = srcs[j]; \
+      for (i = 0; i < n; ++i) { \
+        d = (double)src[i]; \
+        d = d > 0? d + .5 >= N? ++clips, N - 1 : d + .5 \
+                 : d - .5 <= -N - 1? ++clips, -N : d - .5; \
+        STORE_S24(dest + 3 * (stride * i + j), (long)d); \
+      } \
+    } \
+    *dest0 = dest + 3 * stride * n; \
+  } \
+  return clips; \
+}
+
+#if WITH_CR64 || WITH_CR64S
+RINT24_CLIP_FUNCS(_d, double)
+#endif
+#if WITH_CR32 || WITH_CR32S || WITH_VR32
+RINT24_CLIP_FUNCS(_f, float)
+#endif
+
+#undef RINT24_CLIP_FUNCS
+
+
+
 #define INTERLEAVE_TO(T,flag) do { \
   unsigned i; \
   size_t j; \
@@ -174,7 +274,7 @@ void _soxr_deinterleave_f(float * * dest, /* Round/clipping not needed here */
 size_t /* clips */ _soxr_interleave(soxr_datatype_t data_type, void * * dest0,
   double const * const * src, size_t n, unsigned ch, unsigned long * seed)
 {
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: INTERLEAVE_TO(float, 0);
     case SOXR_FLOAT64: INTERLEAVE_TO(double, 1);
 
@@ -190,6 +290,10 @@ size_t /* clips */ _soxr_interleave(soxr_datatype_t data_type, void * * dest0,
     if (ch == 1)
         return lsx_rint16_clip(dest0, src[0], n);
       return lsx_rint16_clip_2(dest0, src, ch, n);
+
+    case SOXR_INT24: if (ch == 1)
+        return lsx_rint24_clip_d(dest0, src[0], n);
+      return lsx_rint24_clip_2_d(dest0, src, ch, n);
     default: break;
   }
   return 0;
@@ -200,7 +304,7 @@ size_t /* clips */ _soxr_interleave(soxr_datatype_t data_type, void * * dest0,
 size_t /* clips */ _soxr_interleave_f(soxr_datatype_t data_type, void * * dest0,
   float const * const * src, size_t n, unsigned ch, unsigned long * seed)
 {
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: INTERLEAVE_TO(float, 1);
     case SOXR_FLOAT64: INTERLEAVE_TO(double, 0);
 
@@ -216,6 +320,10 @@ size_t /* clips */ _soxr_interleave_f(soxr_datatype_t data_type, void * * dest0,
     if (ch == 1)
         return lsx_rint16_clip_f(dest0, src[0], n);
       return lsx_rint16_clip_2_f(dest0, src, ch, n);
+
+    case SOXR_INT24: if (ch == 1)
+        return lsx_rint24_clip_f(dest0, src[0], n);
+      return lsx_rint24_clip_2_f(dest0, src, ch, n);
     default: break;
   }
   return 0;

@@ -32,16 +32,42 @@
   return; \
 } while (0)
 
+/* Unpack a packed, 3-byte 24-bit sample in the host's byte order: */
+#if defined WORDS_BIGENDIAN || defined __BIG_ENDIAN__
+  #define UNPACK_S24(p) ((long)(((unsigned long)((p)[0] & 0xff) << 16 | \
+      (unsigned long)((p)[1] & 0xff) << 8 | \
+      (unsigned long)((p)[2] & 0xff)) ^ 0x800000UL) - 0x800000L)
+#else
+  #define UNPACK_S24(p) ((long)(((unsigned long)((p)[0] & 0xff) | \
+      (unsigned long)((p)[1] & 0xff) << 8 | \
+      (unsigned long)((p)[2] & 0xff) << 16) ^ 0x800000UL) - 0x800000L)
+#endif
+
+#define DEINTERLEAVE_24 do { \
+  unsigned i; \
+  size_t j; \
+  int32_t * const * dest = (int32_t * const *)dest0; \
+  unsigned char const * src = src0; \
+  if (ch == 1) for (j = 0; j < n; ++j) { \
+    dest[0][j] = (int32_t)UNPACK_S24(src); src += 3; \
+  } \
+  else for (j = 0; j < n; ++j) for (i = 0; i < ch; ++i) { \
+    dest[i][j] = (int32_t)UNPACK_S24(src); src += 3; \
+  } \
+  return; \
+} while (0)
+
 static void deinterleave(soxr_datatype_t data_type,
     void * const * dest0,
     void const * src0,
     size_t n, unsigned ch)
 {
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: DEINTERLEAVE(float);
     case SOXR_FLOAT64: DEINTERLEAVE(double);
     case SOXR_INT32  : DEINTERLEAVE(int32_t);
     case SOXR_INT16  : DEINTERLEAVE(int16_t);
+    case SOXR_INT24  : DEINTERLEAVE_24;
     default: break;
   }
 }
@@ -56,14 +82,39 @@ static void deinterleave(soxr_datatype_t data_type,
   return; \
 } while (0)
 
+/* Pack a 24-bit sample into 3 bytes in the host's byte order: */
+#if defined WORDS_BIGENDIAN || defined __BIG_ENDIAN__
+  #define PACK_S24(p, x) do { long y = (long)(x); \
+    (p)[0] = (unsigned char)((unsigned long)y >> 16); \
+    (p)[1] = (unsigned char)((unsigned long)y >> 8); \
+    (p)[2] = (unsigned char)(y); } while (0)
+#else
+  #define PACK_S24(p, x) do { long y = (long)(x); \
+    (p)[0] = (unsigned char)(y); \
+    (p)[1] = (unsigned char)((unsigned long)y >> 8); \
+    (p)[2] = (unsigned char)((unsigned long)y >> 16); } while (0)
+#endif
+
+#define INTERLEAVE_24 do { \
+  unsigned i; \
+  size_t j; \
+  unsigned char * dest = dest0; \
+  int32_t const * const * src = (int32_t const * const *)src0; \
+  for (j = 0; j < n; ++j) for (i = 0; i < ch; ++i) { \
+    PACK_S24(dest, src[i][j]); dest += 3; \
+  } \
+  return; \
+} while (0)
+
 static void interleave(soxr_datatype_t data_type, void * dest0,
   void * const * src0, size_t n, unsigned ch)
 {
-  switch (data_type & 3) {
+  switch (data_type & ~SOXR_SPLIT) {
     case SOXR_FLOAT32: INTERLEAVE(float);
     case SOXR_FLOAT64: INTERLEAVE(double);
     case SOXR_INT32  : INTERLEAVE(int32_t);
     case SOXR_INT16  : INTERLEAVE(int16_t);
+    case SOXR_INT24  : INTERLEAVE_24;
     default: break;
   }
 }

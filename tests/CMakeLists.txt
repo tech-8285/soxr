@@ -60,3 +60,4 @@ if (NOT CMAKE_CROSSCOMPILING)
 endif ()
 
 add_test (1-delay-clear ${BIN}1-delay-clear)
+add_test (io24-test ${BIN}io24-test)
